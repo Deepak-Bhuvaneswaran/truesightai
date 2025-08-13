@@ -1,69 +1,44 @@
-import random
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
+from rest_framework import status
 
-# ---- Fake AI model responses ----
-SAMPLE_OUTPUTS = [
-    {
-        "status": "Real",
-        "confidence": 0.92,
-        "reasoning": "Content matches human-generated patterns"
-    },
-    {
-        "status": "Fake",
-        "confidence": 0.84,
-        "reasoning": "Detected AI-generated linguistic artifacts"
-    },
-    {
-        "status": "Real",
-        "confidence": 0.97,
-        "reasoning": "Authentic human voice characteristics"
-    },
-    {
-        "status": "Fake",
-        "confidence": 0.78,
-        "reasoning": "Unnatural phrasing and semantic inconsistencies detected"
-    },
-    {
-        "status": "Real",
-        "confidence": 0.88,
-        "reasoning": "Pronunciation and intonation match native speaker patterns"
-    },
-    {
-        "status": "Fake",
-        "confidence": 0.91,
-        "reasoning": "Overly uniform speech rhythm characteristic of synthetic generation"
-    },
-    {
-        "status": "Real",
-        "confidence": 0.95,
-        "reasoning": "Evidence of legitimate capture artifacts and background noise"
-    },
-    {
-        "status": "Fake",
-        "confidence": 0.82,
-        "reasoning": "Detected suspicious repetition of certain linguistic structures"
-    },
-    {
-        "status": "Real",
-        "confidence": 0.90,
-        "reasoning": "Syntactic and semantic variety consistent with human authorship"
-    },
-    {
-        "status": "Fake",
-        "confidence": 0.87,
-        "reasoning": "Found irregular pitch contours typical in cloned voice outputs"
-    }
-]
+# Load tokenizer and model once at startup
+tokenizer = AutoTokenizer.from_pretrained("roberta-base")  # Replace with your fine-tuned model path if available
+text_model = AutoModelForSequenceClassification.from_pretrained("roberta-base")
+text_model.eval()
 
-def fake_model_response():
-    return random.choice(SAMPLE_OUTPUTS)
-
-# ---- API endpoint ----
 class TextCheckView(APIView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
-        # We don't do any real model inference here — just send a fake output
-        return Response(fake_model_response())
+        # Get uploaded file
+        text_file = request.FILES.get('file')
+        if not text_file:
+            return Response({"error": "No text file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Read file content
+        try:
+            content = text_file.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return Response({"error": f"Could not read file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Tokenize with truncation to handle long files
+        inputs = tokenizer(content, return_tensors="pt", truncation=True, max_length=512)
+
+        # Run inference
+        with torch.no_grad():
+            outputs = text_model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=1)
+            conf, pred = torch.max(probs, dim=1)
+
+        status_label = "Fake" if pred.item() == 1 else "Real"
+
+        # Return prediction
+        return Response({
+            "status": status_label,
+            "confidence": float(conf.item()),
+            "reasoning": f"Text classification says {status_label}"
+        })
